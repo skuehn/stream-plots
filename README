@@ -1,0 +1,59 @@
+OVERVIEW
+
+This package provides simple and fast utilities for creating
+figures. Programs operate on data streams, succeed silently, and try
+not to make many assumptions about formats or parameters.  The goal is
+ease of use in scripting, so a user can quickly chain together a
+series of visualizations.
+
+CONTENTS
+
+After installation, the plotting programs will be located under bin/.
+Information about running each program can be found by running the
+program with the '--help' flag.  A brief overview of the four
+programs:
+
+o hist:     Create a histogram.  User must specify the high and low
+            bins.  This program is a wrapper for gsl-histogram.
+o scatter:  Compares two variables via scatterplot.  The program takes
+            a file stream input consisting of two tab-delimited
+            columns of numeric values.
+o series:   Plot a series of data.  Multiple columns of input will plot
+            multiple series.
+o spark:    A simplified version of 'series'.  Check out
+  	    http://www.edwardtufte.com/bboard/q-and-a-fetch-msg?msg_id=0001OR&topic_id=1
+	    for an in-depth explanation of the theory and purpose of sparklines.
+
+EXAMPLES
+
+Take a look at the scripts in share/ for some samples.
+singe-instances.sh shows a few standard examples. A more involved
+plotting pipeline is demonstrated in multi-instances.sh
+
+INSTALLATION INSTRUCTIONS
+
+Install a copy of the program by running 'python setup.py install',
+from the root directory of this distribution.  A useful option for
+installing the package in user space is '--prefix'.  For example, to
+install into the local direction $HOME/foo, run 
+'python setup.py install --prefix=$HOME/foo'.  
+
+DEPENDENCIES
+
+The plotting scripts make use of several other packages:
+o The GNU Scientific Library (GSL), http://www.gnu.org/software/gsl.
+  Version >= 1.9.  GSL binaries must be in the users PATH env variable
+o Gnuplot.py version >= 1.7. Debian/ubuntu users: this package is
+  available for most distros, as the 'python-gnuplot' package.
+  Install manually from http://gnuplot-py.sourceforge.net. The
+  Gnuplot.py package must be in the users PYTHONPATH env variable.
+o Python, http://docs.python.org. Version >= 1.4
+
+Installation will fail if either of these dependencies is not met.
+
+TODO
+
+o Fix program input to better handle negative valued paramaters
+o Add a utility for matrix 'heatmap' plotting, or wrap matrix2png
+o Add utilities for lift-charts and roc-curves
+o Control scatterplot fitting output

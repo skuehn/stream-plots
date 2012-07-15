@@ -1,0 +1,217 @@
+#!/usr/bin/env python 
+
+version = "1"
+
+usage = """USAGE: spark [options] [file.dat]
+        Create a sparkline png image of a data series.  Data must be formatted as a single tab-delimited
+        column of numeric values, and may be input through stdin, or [file.dat].  The resulting png image
+        representation is written to stdout.
+
+              Options:
+                --options-file <file>
+                    Read program options from the given file.  Options are specified as name=value
+                    pairs.  Names are identical to program options, with one option listed per line.
+                    The options file must contain a single line at the top, containing the text "[series]".
+                    Options will be read from file first, and subsequently overridden by any command-line
+                    options of the same name.
+                --title <quoted string>
+                    Name of the sparkline, to appear adjacent to the plotting surface. Default is no title.
+                --yrange <int:int>
+                    The range of data indices to display on the y-axis. Argument must be formatted as int:int,
+                    for example:  --yrange=10:20, would only display values at indices 10 through 20 of
+                    the input data set.  Default is to display all indices.
+                --smooth
+                    Add a smoothed approximation line to the plot.
+                --points
+                    Mark a dot at data points on the sparkline. Default is no marking.
+                --minmax
+                    Mark the highest and lowest points in the sparkline.  Default is no marking.
+                --dimensions <x-pixels:y-pixels>
+                    The size of the sparkline image.  Default is 100:50, but will expand in the x-direction
+                    by 7 pixels for each character in a title (if a title is used).
+                 --verbose
+                    Display program status, as well as commands interpreted by subshells.
+                --help
+                    Output this message and exit.
+                --version
+                    Output the program version and exit.
+        """
+
+import atexit
+import os
+import shutil
+import sys
+import tempfile
+
+import Gnuplot
+
+
+def readCommandLine(args, pvars):
+	"""Parse and evaluate program arguments"""
+		
+	from getopt import getopt
+
+	longOptions = ['options-file=', 'yrange=', 'title=', 
+						'minmax', 'verbose', 'help', 'smooth',
+						'dimensions=', 'points', 'version']
+
+	try: # to parse the command line
+		opts, pargs = getopt(args, [], longOptions)
+
+		# Look for a config file
+		for i in range(len(opts)):
+			if opts[i][0] == '--options-file':
+				annoteParams = readParamFile(opts[i][1])
+				opts.extend(annoteParams)
+
+		# Parse command line
+		for optName, optValue in opts:
+
+			if optName[0:2] != "--":
+				optName = "--" + optName
+				
+			if optName == '--yrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid yrange. Please specify argument as [float]:[float]"
+				pvars['yrange'] = optValue
+			elif optName == '--dimensions':
+				vals = [int(val) for val in optValue.split(":")]
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid dimension spec. Please specify argument as [int]:[int]"
+				pvars['dimensions'] = vals
+			elif optName == '--title':
+				pvars['title'] = ' ' + optValue
+			elif optName == '--smooth':
+				pvars['smooth'] = True
+			elif optName == '--minmax':
+				pvars['minmax'] = True
+			elif optName == '--points':
+				pvars['points'] = True
+			elif optName == '--verbose':
+				pvars['verbose'] = True
+			elif optName == '--help':
+				print >> sys.stdout, usage
+				sys.exit(0)
+			elif optName == '--version':
+				print >> sys.stdout, version
+				sys.exit(0)
+				
+		# Get file names, if present
+		if len(pargs) == 0:
+			pvars['usesStdin'] = True
+		elif len(pargs) == 1:
+			if not os.access(pargs[0], os.R_OK):
+				raise Exception, "Unable to access: " + str(pargs[0])
+			pvars['inputDataFileName'] = pargs[0]
+
+		else:
+			print >> sys.stderr, usage
+			sys.exit(1)
+
+	except StandardError, err:
+		print >> sys.stderr, "Error: " + str(err) +"."
+		sys.exit(1)
+
+def readParamFile(paramFileName):
+	"""Parse and load a param file"""
+
+	import ConfigParser
+
+	config = ConfigParser.ConfigParser()
+	config.optionxform = str # Make config parser case sensitive
+	config.readfp(open(paramFileName))
+	annoteParams = config.items("spark")
+	return annoteParams
+
+
+
+def setStyles(pvars, gnuplot, dirtyDefaults):
+	"""Inspect 'pvars', and operate on 'gnuplot' accordingly"""
+
+	if pvars['dimensions']:
+		terminalStr = "set terminal png transparent medium size " + str(pvars['dimensions'][0]) + "," + str(pvars['dimensions'][1]) + " crop"
+	else:
+		if pvars['title']:
+			terminalStr = "set terminal png transparent medium size " + str(100 + (7 * len(pvars['title'])))+ ",50 crop"
+		else:
+			terminalStr = "set terminal png transparent medium size 100,50 crop"
+	gnuplot(terminalStr)
+	gnuplot(dirtyDefaults)
+	if pvars['yrange']:
+		yrangeStr = "set yrange[" + pvars['yrange'] + "]"	
+		gnuplot(yrangeStr)
+	if pvars['title']:
+		titleStr = "set key on outside center right samplen 0"
+	else:
+		titleStr = "set key off"
+	gnuplot(titleStr)
+
+def plotCommand(pvars, gnuplot):
+	"""Instruct gnuplot subprocess to plot"""
+
+	# Build and execute the plot command
+	plotStr = "plot \"" + pvars['inputDataFileName'] + "\" u 1"
+	if pvars['title']:
+		plotStr += " title \'" + pvars['title'] + "\'"
+	if pvars['points']:
+		plotStr += "w linespoints ps 0.3"
+	else:
+		plotStr += "w lines"
+	plotStr += " lc rgb \'black\'"
+
+	if pvars['smooth']:
+		plotStr += ", \'\' u 1 smooth sbezier w lines lc rgb \'red\'"
+	gnuplot(plotStr)
+
+def cleanup(tmpFile):
+	""" Remove tmp file """
+	if tmpFile:
+		os.unlink(tmpFile[1])
+
+#######################################################################
+# Main
+#######################################################################
+def main():
+
+	pvars = {
+		'verbose' : False,
+		'inputDataFileName' : None,
+		'yrange' : None,
+		'title' : None,
+		'tmpDataFileInfo' : None,
+		'usesStdin' : False,
+		'dimensions' : None,
+		'minmax' : False,
+		'points' : False,
+		'smooth' : False
+		}
+
+	# Initialize plot task
+	readCommandLine(sys.argv[1:], pvars)
+	atexit.register(cleanup, tmpFile=pvars['tmpDataFileInfo'])
+
+	# Copy stdin to the temp file
+	if(pvars['usesStdin']):
+		pvars['tmpDataFileInfo'] = tempfile.mkstemp(".spark_wrapper")
+		pvars['inputDataFileName'] = pvars['tmpDataFileInfo'][1]
+		inputFile = open(pvars['inputDataFileName'], 'w')
+		for line in sys.stdin:
+			inputFile.write(line)
+		inputFile.flush()
+
+	# Plot
+	dirtyDefaults = "unset xtics; unset ytics; set border 0"
+
+	if pvars['verbose']:
+		gp = Gnuplot.Gnuplot(debug=1)
+	else:
+		gp = Gnuplot.Gnuplot()
+
+	setStyles(pvars, gp, dirtyDefaults)
+	plotCommand(pvars, gp)
+	sys.exit(0)
+
+if __name__ == '__main__':
+	main()
+

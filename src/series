@@ -1,0 +1,231 @@
+#!/usr/bin/env python 
+
+version = "1"
+
+usage = """USAGE: series [options] [file.dat]
+        Create a simple png image of a data series.  Data must be formatted as tab-delimited
+        columns of numeric values, and may be input through stdin, or [file.dat].
+        One or more columns are required.  The resulting png image representation is written
+        to stdout.
+
+              Options:
+                --options-file <file>
+                    Read program options from the given file.  Options are specified as name=value
+                    pairs.  Names are identical to program options, with one option listed per line.
+                    The options file must contain a single line at the top, containing the text "[series]".
+                    Options will be read from file first, and subsequently overridden by any command-line
+                    options of the same name.
+                --title <quoted string>
+                    Name of the plot, to appear above the plotting surface. Default is no title.
+                --xlabel <quoted string>
+                    A label to be printed below the X axis. Default is no label.
+                --ylabel <quoted string>
+                    See --xlabel
+                --keytitles
+                    Flag indicating that the first row of data should be interpreted as a data set title,
+                    and named as such in the plot key.  Default is no keytitles.
+                --series [lines, points, linespoints]
+                    How to draw the information.  Default is linespoints.
+                --xrange <int:int>
+                    The range of data indices to display on the x-axis. Argument must be formatted as int:int,
+                    for example:  --xrange=10:20, would only display values at indices 10 through 20 of
+                    the input data set.  Default is to display all indices.
+                --yrange <int:int>
+                    See --xrange.
+                --verbose
+                    Display program status, as well as commands interpreted by subshells.
+                --help
+                    Output this message and exit.
+                --version
+                    Output the program version and exit.
+        """
+
+
+import atexit
+import os
+import shutil
+import sys
+import tempfile
+
+import Gnuplot
+
+
+def readCommandLine(args, pvars):
+	"""Parse and evaluate program arguments"""
+		
+	from getopt import getopt
+
+	longOptions = ['options-file=', 'xrange=', 'yrange=', 'title=', 'xlabel=', 'ylabel=',
+						'keytitles', 'series=', 'verbose', 'help', 'version']
+
+	try: # to parse the command line
+		opts, pargs = getopt(args, [], longOptions)
+
+		# Look for a config file
+		for i in range(len(opts)):
+			if opts[i][0] == '--options-file':
+				annoteParams = readParamFile(opts[i][1])
+				opts.extend(annoteParams)
+
+		# Parse command line
+		for optName, optValue in opts:
+
+			if optName[0:2] != "--":
+				optName = "--" + optName
+				
+			if optName == '--xrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid xrange. Please specify argument as [float]:[float]"
+				pvars['xrange'] = optValue
+			elif optName == '--yrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid yrange. Please specify argument as [float]:[float]"
+				pvars['yrange'] = optValue
+			elif optName == '--title':
+				pvars['title'] = optValue
+			elif optName == '--xlabel':
+				pvars['xlabel'] = optValue
+			elif optName == '--ylabel':
+				pvars['ylabel'] = optValue
+			elif optName == '--series':
+				optimizers = ['points', 'lines', 'linespoints']
+				if optValue in optimizers:
+					pvars['series'] = optValue
+				else:
+					raise Exception, optValue + " is not a valid series style.  Available styles: " + str(optimizers)
+			elif optName == '--keytitles':
+				pvars['keytitles'] = True
+			elif optName == '--verbose':
+				pvars['verbose'] = True
+			elif optName == '--help':
+				print >> sys.stdout, usage
+				sys.exit(0)
+			elif optName == '--version':
+				print >> sys.stdout, version
+				sys.exit(0)
+				
+		# Get file names, if present
+		if len(pargs) == 0:
+			pvars['usesStdin'] = True
+		elif len(pargs) == 1:
+			if not os.access(pargs[0], os.R_OK):
+				raise Exception, "Unable to access: " + str(pargs[0])
+			pvars['inputDataFileName'] = pargs[0]
+			pvars['numSeries'] = len(open(pvars['inputDataFileName']).readline().split())
+
+		else:
+			print >> sys.stderr, usage
+			sys.exit(1)
+
+	except StandardError, err:
+		print >> sys.stderr, "Error: " + str(err) +"."
+		sys.exit(1)
+
+def readParamFile(paramFileName):
+	"""Parse and load a param file"""
+
+	import ConfigParser
+
+	config = ConfigParser.ConfigParser()
+	config.optionxform = str # Make config parser case sensitive
+	config.readfp(open(paramFileName))
+	annoteParams = config.items("series")
+	return annoteParams
+
+
+
+def setStyles(pvars, gnuplot, dirtyDefaults):
+	"""Inspect 'pvars', and operate on 'gnuplot' accordingly"""
+
+	gnuplot(dirtyDefaults)
+	lineStyleStr = "set data style " + pvars['series']
+	gnuplot(lineStyleStr)
+	if pvars['xrange']:
+		xrangeStr = "set xrange[" + pvars['xrange'] + "]"
+		gnuplot(xrangeStr)
+	if pvars['yrange']:
+		yrangeStr = "set yrange[" + pvars['yrange'] + "]"	
+		gnuplot(yrangeStr)
+	if pvars['title']:
+		titleStr = "set title \"" + pvars['title'] + "\""
+		gnuplot(titleStr)
+	if pvars['xlabel']:
+		xlabelStr = "set xlabel \"" + pvars['xlabel'] + "\""
+		gnuplot(xlabelStr)
+	if pvars['ylabel']:
+		ylabelStr = "set ylabel \"" + pvars['ylabel'] + "\""
+		gnuplot(ylabelStr)
+
+def plotCommand(pvars, gnuplot):
+	"""Instruct gnuplot subprocess to plot"""
+
+	# Build and execute the plot command
+	plotStr = "plot \"" + pvars['inputDataFileName'] + "\" u 1"
+	if pvars['keytitles']:
+		plotStr += " title col"
+
+	for i in range(1, pvars['numSeries']):
+		plotStr += ", \'\'" + " u " + str(i + 1)
+		if pvars['keytitles']:
+			plotStr += " title col"
+
+	gnuplot(plotStr)
+
+def cleanup(tmpFile):
+	""" Remove tmp file """
+	if tmpFile:
+		os.unlink(tmpFile[1])
+
+#######################################################################
+# Main
+#######################################################################
+def main():
+
+	pvars = {
+		'verbose' : False,
+		'inputDataFileName' : None,
+		'xrange' : None,
+		'yrange' : None,
+		'title' : None,
+		'xlabel' : None,
+		'ylabel' : None,
+		'series' : "linespoints",
+		'tmpDataFileInfo' : None,
+		'usesStdin' : False,
+		'keytitles' : False,
+		'numSeries' : 1
+		}
+
+	# Initialize plot task
+	readCommandLine(sys.argv[1:], pvars)
+	atexit.register(cleanup, tmpFile=pvars['tmpDataFileInfo'])
+
+	# Copy stdin to the temp file
+	if(pvars['usesStdin']):
+		pvars['tmpDataFileInfo'] = tempfile.mkstemp(".series_wrapper")
+		pvars['inputDataFileName'] = pvars['tmpDataFileInfo'][1]
+		inputFile = open(pvars['inputDataFileName'], 'w')
+		i = 1
+		for line in sys.stdin:
+			if(i == 1):
+				pvars['numSeries'] = len(line.split())
+			inputFile.write(line)
+			i += 1
+		inputFile.flush()
+
+	# Plot
+	dirtyDefaults = "set terminal png butt medium enhanced; set xtics nomirror; set ytics nomirror; set border 3"
+
+	if pvars['verbose']:
+		gp = Gnuplot.Gnuplot(debug=1)
+	else:
+		gp = Gnuplot.Gnuplot()
+
+	setStyles(pvars, gp, dirtyDefaults)
+	plotCommand(pvars, gp)
+	sys.exit(0)
+
+if __name__ == '__main__':
+	main()

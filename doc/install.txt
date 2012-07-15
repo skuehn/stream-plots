@@ -1,0 +1,26 @@
+
+INSTALLATION INSTRUCTIONS
+
+The plots package follows standard python naming and packaging conventions.
+Install a copy of the program by running 'python setup.py install',
+from the root directory of this distribution.  A useful option for
+installing the package in user space is '--prefix'.  For example, to
+install into the local direction $HOME/foo, run 
+'python setup.py install --prefix=$HOME/foo'.  
+
+
+DEPENDENCIES
+
+The plotting scripts make use of several other packages:
+
+o The GNU Scientific Library (GSL), http://www.gnu.org/software/gsl.
+  Version >= 1.9.  GSL binaries must be in the users PATH env variable
+o Gnuplot.py version >= 1.7. Debian/ubuntu users: this package is
+  available for most distros, as the 'python-gnuplot' package.
+  Install manually from http://gnuplot-py.sourceforge.net. The
+  Gnuplot.py package must be in the users PYTHONPATH env variable.
+o Python, http://docs.python.org. Version >= 1.4
+
+Installation will fail if either of these dependencies is not met.
+
+

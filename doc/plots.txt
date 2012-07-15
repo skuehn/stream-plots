@@ -1,0 +1,35 @@
+OVERVIEW
+
+This package provides simple and fast utilities for creating
+figures. Programs operate on data streams, succeed silently, and try
+not to make many assumptions about formats or parameters.  The primary
+design motivation was ease of use in unix scripting, which enables the
+end user to 'pipeline' a series of visualizations.
+
+CONTENTS
+
+After installing the plots package (see install.txt for help), a set
+of scripting utilities will be located under bin/.  Information about
+running each program can be found by running the program with the
+'--help' flag.  A brief overview of the plotting programs:
+
+o hist:     Create a histogram.  User must specify the high and low
+            bins.  This program is a wrapper for gsl-histogram.
+o scatter:  Compares two variables via scatterplot.  The program takes
+            a file stream input consisting of two tab-delimited
+            columns of numeric values.
+o series:   Plot a series of data.  Multiple columns of input will plot
+            multiple series.
+o spark:    A simplified version of 'series'.  Consider 
+  	    http://www.edwardtufte.com/bboard/q-and-a-fetch-msg?msg_id=0001OR&topic_id=1
+	    for an in-depth explanation of the theory and purpose of sparklines.
+
+EXAMPLES
+
+Numerous examples are contained in the share/ directory of the
+installation.  For single, 'ad-hoc' uses for the plotting programs,
+consider the examples in single-instances.sh.  A more pipelined,
+data-management emphasized style of plotting is demonstrated in
+multi-instances.sh
+
+

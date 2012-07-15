@@ -1,0 +1,282 @@
+#!/usr/bin/env python
+
+version = "1"
+
+usage = """USAGE: hist [options] <low-bin> <high-bin> [file.dat]
+        Create a simple histogram.  By default, each bin score is reported as the percent of
+        input data falling into that bin.  Bins begin at <low-bin>, and continue until <high-bin> in
+        integer width steps. Note:  If a bin starts at a negative number, please pass the number to
+        the program with escaped quotes ( ie: \\"-2\\"). Data must be formatted as a single column of
+        numeric values, and may be input through stdin, or [file.dat]. The resulting png image representation is
+        written to stdout.
+
+              Options:
+                --options-file <file>
+                    Read program options from the given file.  Options are specified as name=value
+                    pairs.  Names are identical to program options, with one option listed per line.
+                    The options file must contain a single line at the top, containing the text "[hist]".
+                    Options will be read from file first, and subsequently overridden by any command-line
+                    options of the same name.
+                --cumulative
+                    Display the cumulative number of values in each bin.  This option overrides the
+                    default of printing the total % (frequency) of each bin.
+                --nbins <int>
+                    The number of bins to use
+                --title <quoted string>
+                    Name of the plot, to appear above the plotting surface. Default is no title.
+                --xlabel <quoted string>
+                    A label to be printed below the X axis. Default is no label.
+                --ylabel <quoted string>
+                    See --xlabel
+                --datatitle <quoted string>
+                    A title to be associated with data points, and appear in the plot legend.
+                --xrange <int:int>
+                    The range of data indices to display on the x-axis. Argument must be formatted as int:int,
+                    for example:  --xrange=10:20, would only display values at indices 10 through 20 of
+                    the input data set.  Default is to display all indices.
+                --yrange <int:int>
+                    See --xrange.
+                --verbose
+                    Display program status, as well as commands interpreted by subshells.
+                --help
+                    Output this message and exit.
+                --version
+                    Output the program version and exit.
+        """
+
+import atexit
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+import Gnuplot
+
+
+def readCommandLine(args, pvars):
+	"""Parse and evaluate program arguments"""
+		
+	from getopt import getopt
+
+	longOptions = ['options-file=', 'cumulative', 'xrange=', 'yrange=', 'title=', 'xlabel=', 'ylabel=',
+						'datatitle=', 'nbins=', 'verbose', 'help', 'version']
+
+	try: # to parse the command line
+			
+		opts, pargs = getopt(args, [], longOptions)
+
+		# Look for a config file
+		for i in range(len(opts)):
+			if opts[i][0] == '--options-file':
+				annoteParams = readParamFile(opts[i][1])
+				opts.extend(annoteParams)
+
+		# Parse command line
+		for optName, optValue in opts:
+
+			if optName[0:2] != "--":
+				optName = "--" + optName
+				
+			if optName == '--xrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid xrange. Please specify argument as [float]:[float]"
+				pvars['xrange'] = optValue
+			elif optName == '--cumulative':
+				pvars['cumulative'] = True
+			elif optName == '--yrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid yrange. Please specify argument as [float]:[float]"
+				pvars['yrange'] = optValue
+			elif optName == '--title':
+				pvars['title'] = optValue
+			elif optName == '--xlabel':
+				pvars['xlabel'] = optValue
+			elif optName == '--ylabel':
+				pvars['ylabel'] = optValue
+			elif optName == '--datatitle':
+				pvars['datatitle'] = optValue
+			elif optName == '--nbins':
+				pvars['nbins'] = int(optValue)
+			elif optName == '--verbose':
+				pvars['verbose'] = True
+			elif optName == '--help':
+				print >> sys.stdout, usage
+				sys.exit(0)
+			elif optName == '--version':
+				print >> sys.stdout, version
+				sys.exit(0)
+				
+		# Get file names, if present
+		if len(pargs) < 2 or len(pargs) > 3:
+			print >> sys.stderr, usage
+			sys.exit(1)
+
+		if pargs[0].startswith("\""):
+			pvars['lowBin'] = int("".join(pargs[0][1:-1]))
+		else:
+			pvars['lowBin'] = int(pargs[0])
+		if pargs[1].startswith("\""):
+			pvars['highBin'] = int("".join(pargs[1][1:-1]))
+		else:
+			pvars['highBin'] = int(pargs[1])
+		if len(pargs) == 2:
+			pvars['usesStdin'] = True
+		elif len(pargs) == 3:
+			if not os.access(pargs[2], os.R_OK):
+				raise Exception, "Unable to access: " + str(pargs[2])
+			pvars['inputDataFileName'] = pargs[2]
+
+	except StandardError, err:
+		print >> sys.stderr, "Error: " + str(err) + "."
+		sys.exit(1)
+
+def readParamFile(paramFileName):
+	"""Parse and load a param file"""
+
+	import ConfigParser
+
+	config = ConfigParser.ConfigParser()
+	config.optionxform = str # Make config parser case sensitive
+	config.readfp(open(paramFileName))
+	annoteParams = config.items("hist")
+	return annoteParams
+
+
+def setStyles(pvars, gnuplot, dirtyDefaults):
+	"""Inspect 'pvars', and operate on 'gnuplot' accordingly"""
+
+	gnuplot(dirtyDefaults)
+	if not pvars['datatitle']:
+		gnuplot('set key off')
+	if pvars['xrange']:
+		xrangeStr = "set xrange[" + pvars['xrange'] + "]"
+		gnuplot(xrangeStr)
+	if pvars['yrange']:
+		yrangeStr = "set yrange[" + pvars['yrange'] + "]"	
+		gnuplot(yrangeStr)
+	if pvars['title']:
+		titleStr = "set title \"" + pvars['title'] + "\""
+		gnuplot(titleStr)
+	if pvars['xlabel']:
+		xlabelStr = "set xlabel \"" + pvars['xlabel'] + "\""
+		gnuplot(xlabelStr)
+	if pvars['ylabel']:
+		ylabelStr = "set ylabel \"" + pvars['ylabel'] + "\""
+		gnuplot(ylabelStr)
+
+
+def getGSLBins(pvars):
+	""" Calculate histogram bins """
+
+	gslCommand = "cat " + pvars['inputDataFileName'] + " | gsl-histogram " + str(pvars['lowBin']) + " " + str(pvars['highBin'])
+	if pvars['nbins']:
+		gslCommand += " " + str(pvars['nbins'])
+	if pvars['verbose']:
+		print >> sys.stderr, gslCommand
+
+	wcCommand = "wc -l " + pvars['inputDataFileName']
+	if pvars['verbose']:
+		print >> sys.stderr, wcCommand
+	try:
+		gslProc = subprocess.Popen(gslCommand, shell=True, stderr=subprocess.PIPE,
+											stdout=subprocess.PIPE, close_fds=True)
+		(gslStderr, gslStdout) = (gslProc.stderr, gslProc.stdout)
+
+		wcProc = subprocess.Popen(wcCommand, shell=True, stderr=subprocess.PIPE,
+										  stdout=subprocess.PIPE, close_fds=True)
+		(wcStderr, wcStdout) = (wcProc.stderr, wcProc.stdout)
+
+	except OSError, e:
+		print >> sys.stderr, "Subprocess execution failed: "
+		if gslStderr:
+			print >> sys.stderr, gslStderr
+		if wcStderr:
+			print >> sys.stderr, wcStderr
+
+	numRows = int(wcStdout.readline().split()[0])
+	if numRows == 0:
+		return -1
+
+	outFile = open(pvars['tmpBinFileInfo'][1], 'w')
+	for line in gslStdout.readlines():
+		n1, n2, count = line.split()
+		if not pvars['cumulative']:
+			outFile.write("%s %s %03.3f\n" % (n1, n2, float(count)/numRows))
+		else:
+			outFile.write("%s %s %s\n" % (n1, n2, count))
+	return 0
+
+def plotCommand(pvars, gnuplot):
+	"""Instruct gnuplot subprocess to plot"""
+
+	# Build and execute the plot command
+	plotStr = "plot \"" + pvars['tmpBinFileInfo'][1] + "\" using 1:3"
+	if pvars['datatitle']:
+		plotStr += " title \"" + pvars['datatitle'] + "\""
+	plotStr += " with boxes"
+
+	gnuplot(plotStr)
+
+def cleanup(cleanItems):
+	""" Remove tmp file """
+	if cleanItems['tmpDataFileInfo']:
+		os.unlink(cleanItems['tmpDataFileInfo'][1])
+	os.unlink(cleanItems['tmpBinFileInfo'][1])
+
+#######################################################################
+# Main
+#######################################################################
+def main():
+
+	pvars = {
+		'verbose' : False,
+		'inputDataFileName' : None,
+		'xrange' : None,
+		'yrange' : None,
+		'title' : None,
+		'xlabel' : None,
+		'ylabel' : None,
+		'tmpDataFileInfo' : None,
+		'tmpBinFileInfo' : None,
+		'usesStdin' : False,
+		'datatitle' : None,
+		'cumulative' : False,
+		'nbins' : None,
+		'lowBin' : None,
+		'highBin' : None
+		}
+
+	# Initialize plot task
+	readCommandLine(sys.argv[1:], pvars)
+	atexit.register(cleanup, cleanItems=pvars)
+
+	# Copy stdin to the temp file
+	if(pvars['usesStdin']):
+		pvars['tmpDataFileInfo'] = tempfile.mkstemp(".hist_wrapper")
+		pvars['inputDataFileName'] = pvars['tmpDataFileInfo'][1]
+		inputFile = open(pvars['inputDataFileName'], 'w')
+		for line in sys.stdin:
+			inputFile.write(line)
+		inputFile.flush()
+	pvars['tmpBinFileInfo'] = tempfile.mkstemp(".hist_wrapper-bins")
+
+	# Perform binning
+	binningStatus = getGSLBins(pvars)
+	
+	# Plot
+	dirtyDefaults = "set terminal png butt medium enhanced; set xtics nomirror; set ytics nomirror; set border 3; set bmargin 6; set style fill solid noborder"
+
+	if pvars['verbose']:
+		gp = Gnuplot.Gnuplot(debug=1)
+	else:
+		gp = Gnuplot.Gnuplot()
+
+	setStyles(pvars, gp, dirtyDefaults)
+	plotCommand(pvars, gp)
+	sys.exit(0)
+
+if __name__ == '__main__':
+	main()

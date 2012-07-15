@@ -1,0 +1,240 @@
+#!/usr/bin/env python 
+
+version = "1"
+
+usage = """USAGE: scatter [options] [file.dat]
+        Create a simple scatterplot.  Data must be formatted as two tab-delimited
+        columns of numeric values, and may be input through stdin, or [file.dat].
+        The resulting png image representation is written to stdout.
+
+              Options:
+                --options-file <file>
+                    Read program options from the given file.  Options are specified as name=value
+                    pairs.  Names are identical to program options, with one option listed per line.
+                    The options file must contain a single line at the top, containing the text "[scatter]".
+                    Options will be read from file first, and subsequently overridden by any command-line
+                    options of the same name.
+                --title <quoted string>
+                    Name of the plot, to appear above the plotting surface. Default is no title.
+                --xlabel <quoted string>
+                    A label to be printed below the X axis. Default is no label.
+                --ylabel <quoted string>
+                    See --xlabel
+                --datatitle <quoted string>
+                    A title to be associated with data points, and appear in the plot legend.
+                --xrange <int:int>
+                    The range of data indices to display on the x-axis. Argument must be formatted as int:int,
+                    for example:  --xrange=10:20, would only display values at indices 10 through 20 of
+                    the input data set.  Default is to display all indices.
+                --yrange <int:int>
+                    See --xrange.
+                --dotsize [small | medium | large ]
+                    A relative size of plotting points. Default: medium
+                --fit-line
+                    Fit a line, y=mx+b, to the data.  Default is to not fit a line
+                --verbose
+                    Display program status, as well as commands interpreted by subshells.
+                --help
+                    Output this message and exit.
+                --version
+                    Output the program version and exit.
+        """
+
+import atexit
+import os
+import shutil
+import sys
+import tempfile
+
+import Gnuplot
+
+
+def readCommandLine(args, pvars):
+	"""Parse and evaluate program arguments"""
+		
+	from getopt import getopt
+
+	longOptions = ['options-file=', 'xrange=', 'yrange=', 'title=', 'xlabel=', 'ylabel=',
+						'datatitle=', 'dotsize=', 'fit-line', 'verbose', 'help', 'version']
+
+	try: # to parse the command line
+		opts, pargs = getopt(args, [], longOptions)
+
+		# Look for a config file
+		for i in range(len(opts)):
+			if opts[i][0] == '--options-file':
+				annoteParams = readParamFile(opts[i][1])
+				opts.extend(annoteParams)
+
+		# Parse command line
+		for optName, optValue in opts:
+
+			if optName[0:2] != "--":
+				optName = "--" + optName
+				
+			if optName == '--xrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid xrange. Please specify argument as [float]:[float]"
+				pvars['xrange'] = optValue
+			elif optName == '--yrange':
+				vals = optValue.split(":")
+				if len(vals) != 2:
+					raise Exception, optValue + " is not a valid yrange. Please specify argument as [float]:[float]"
+				pvars['yrange'] = optValue
+			elif optName == '--title':
+				pvars['title'] = optValue
+			elif optName == '--xlabel':
+				pvars['xlabel'] = optValue
+			elif optName == '--ylabel':
+				pvars['ylabel'] = optValue
+			elif optName == '--datatitle':
+				pvars['datatitle'] = optValue
+			elif optName == '--dotsize':
+				dotTypes = ['small', 'medium', 'large']
+				if optValue not in dotTypes:
+					raise Exception, optValue + " is not a valid dot size. Valid sizes: " + str(dotTypes)
+				pvars['dotsize'] = optValue
+			elif optName == '--verbose':
+				pvars['verbose'] = True
+			elif optName == '--fit-line':
+				pvars['fitline'] = True
+			elif optName == '--help':
+				print >> sys.stdout, usage
+				sys.exit(0)
+			elif optName == '--version':
+				print >> sys.stdout, version
+				sys.exit(0)
+				
+		# Get file names, if present
+		if len(pargs) == 0:
+			pvars['usesStdin'] = True
+		elif len(pargs) == 1:
+			if not os.access(pargs[0], os.R_OK):
+				raise Exception, "Unable to access: " + str(pargs[0])
+			pvars['inputDataFileName'] = pargs[0]
+			if len(open(pvars['inputDataFileName']).readline().split()) != 2:
+				raise Exception, "Input data must be two columns, tab delimited"
+
+		else:
+			print >> sys.stderr, usage
+			sys.exit(1)
+
+	except StandardError, err:
+		print >> sys.stderr, "Error: " + str(err) +"."
+		sys.exit(1)
+
+def readParamFile(paramFileName):
+	"""Parse and load a param file"""
+
+	import ConfigParser
+
+	config = ConfigParser.ConfigParser()
+	config.optionxform = str # Make config parser case sensitive
+	config.readfp(open(paramFileName))
+	annoteParams = config.items("scatter")
+	return annoteParams
+
+
+
+def setStyles(pvars, gnuplot, dirtyDefaults):
+	"""Inspect 'pvars', and operate on 'gnuplot' accordingly"""
+
+	gnuplot(dirtyDefaults)
+	if not pvars['datatitle']:
+		gnuplot('set key off')
+	if pvars['xrange']:
+		xrangeStr = "set xrange[" + pvars['xrange'] + "]"
+		gnuplot(xrangeStr)
+	if pvars['yrange']:
+		yrangeStr = "set yrange[" + pvars['yrange'] + "]"	
+		gnuplot(yrangeStr)
+	if pvars['title']:
+		titleStr = "set title \"" + pvars['title'] + "\""
+		gnuplot(titleStr)
+	if pvars['xlabel']:
+		xlabelStr = "set xlabel \"" + pvars['xlabel'] + "\""
+		gnuplot(xlabelStr)
+	if pvars['ylabel']:
+		ylabelStr = "set ylabel \"" + pvars['ylabel'] + "\""
+		gnuplot(ylabelStr)
+
+def plotCommand(pvars, gnuplot):
+	"""Instruct gnuplot subprocess to plot"""
+
+	# Calc the line fit equation
+	if pvars['fitline']:
+		gnuplot('f(x) = m*x + b')
+		gnuplot("fit f(x) \"" + pvars['inputDataFileName'] + "\" u 1:2 via m,b")
+
+	# Build and execute the plot command
+	plotStr = "plot \"" + pvars['inputDataFileName'] + "\" u 1:2"
+	if pvars['datatitle']:
+		plotStr += " title \"" + pvars['datatitle'] + "\""
+
+	if pvars['dotsize'] == "small":
+		plotStr += " w points ps 0.2 pt 20"
+	elif pvars['dotsize'] == "medium":
+		plotStr += " w points ps 0.6 pt 20"
+	elif pvars['dotsize'] == "large":
+		plotStr += " w points ps 1 pt 20"
+
+	if pvars['fitline']:
+		plotStr += ", f(x) with lines"
+
+	gnuplot(plotStr)
+
+def cleanup(tmpFile):
+	""" Remove tmp file """
+	if tmpFile:
+		os.unlink(tmpFile[1])
+
+#######################################################################
+# Main
+#######################################################################
+def main():
+
+	pvars = {
+		'verbose' : False,
+		'inputDataFileName' : None,
+		'xrange' : None,
+		'yrange' : None,
+		'title' : None,
+		'xlabel' : None,
+		'ylabel' : None,
+		'tmpDataFileInfo' : None,
+		'usesStdin' : False,
+		'datatitle' : None,
+		'dotsize' : "medium",
+		'fitline' : False
+		}
+
+	# Initialize plot task
+	readCommandLine(sys.argv[1:], pvars)
+	atexit.register(cleanup, tmpFile=pvars['tmpDataFileInfo'])
+
+	# Copy stdin to the temp file
+	if(pvars['usesStdin']):
+		pvars['tmpDataFileInfo'] = tempfile.mkstemp(".series_wrapper")
+		pvars['inputDataFileName'] = pvars['tmpDataFileInfo'][1]
+		inputFile = open(pvars['inputDataFileName'], 'w')
+		for line in sys.stdin:
+			if len(line.split()) != 2:
+				raise Exception, "Input data must be two columns, tab delimited"
+			inputFile.write(line)
+		inputFile.flush()
+
+	# Plot
+	dirtyDefaults = "set terminal png butt medium enhanced; set xtics nomirror; set ytics nomirror; set border 3"
+
+	if pvars['verbose']:
+		gp = Gnuplot.Gnuplot(debug=1)
+	else:
+		gp = Gnuplot.Gnuplot()
+
+	setStyles(pvars, gp, dirtyDefaults)
+	plotCommand(pvars, gp)
+	sys.exit(0)
+
+if __name__ == '__main__':
+	main()
